@@ -25,6 +25,7 @@ import time
 import argparse
 import os
 import subprocess
+import random
 
 class ESPROM:
 
@@ -63,7 +64,9 @@ class ESPROM:
             "\x04\x00\x0b\xcc\x56\xec\xfd\x06\xff\xff\x00\x00"
 
     def __init__(self, port = 0, baud = ESP_ROM_BAUD):
-        self._port = serial.Serial(port, baud)
+        self._baud = baud
+        self._portName = port
+        self._port = serial.Serial(self._portName, self._baud)
 
     """ Read bytes from the serial port while performing SLIP unescaping """
     def read(self, length = 1):
@@ -100,10 +103,10 @@ class ESPROM:
             # Construct and send request
             pkt = struct.pack('<BBHI', 0x00, op, len(data), chk) + data
             self.write(pkt)
-
+        
         # Read header of response and parse
         if self._port.read(1) != '\xc0':
-            raise Exception('Invalid head of packet')
+            raise Exception('Invalid head of packet ')
         hdr = self.read(8)
         (resp, op_ret, len_ret, val) = struct.unpack('<BBHI', hdr)
         if resp != 0x01 or (op and op_ret != op):
@@ -124,28 +127,67 @@ class ESPROM:
         for i in xrange(7):
             self.command()
 
+    """ Reset ESP by Serial """
+    def resetESP(self):
+        # RTS = CH_PD (i.e reset)
+        # DTR = GPIO0
+        print 'Reset ESP...'
+        sys.stdout.flush()
+        self._port.setRTS(True)
+        self._port.setDTR(True)
+        time.sleep(0.1)
+        self._port.setRTS(False)
+        time.sleep(0.4 + (random.random()/5))
+        self._port.setDTR(False)
+        time.sleep(0.2 + (random.random()/5))
+        self._port.flushInput()
+        self._port.flushOutput()
+        self._port.flushInput()
+        
+        # Construct dummy and send request
+        data = '\x07\x07\x12\x20'+32*'\x55'
+        pkt = struct.pack('<BBHI', 0x00, ESPROM.ESP_SYNC, len(data), 0) + data
+        self.write(pkt)
+        self._port.flush()
+        time.sleep(0.1)
+        self.write(pkt)
+        self._port.flush()
+        time.sleep(0.2)
+        self._port.flushInput()
+        self._port.flushOutput()
+        self._port.flushInput()
+
     """ Try connecting repeatedly until successful, or giving up """
     def connect(self):
         print 'Connecting...'
-
-        # RTS = CH_PD (i.e reset)
-        # DTR = GPIO0
-        self._port.setRTS(True)
-        self._port.setDTR(True)
-        self._port.setRTS(False)
-        time.sleep(0.1)
-        self._port.setDTR(False)
-
-        self._port.timeout = 0.5
-        for i in xrange(10):
+        
+        self.resetESP()
+        
+        self._port.timeout = 0.2
+        for i in xrange(100):
             try:
+                #print 'Connecting... ', i
+                if i % 10 == 0 and i > 0: 
+                    self._baud = int(self._baud*0.75)
+                    self._port.baudrate = self._baud
+                    print 'New Baud: ', self._baud
+                    self.resetESP()
+                elif i % 5 == 0 and i > 0: 
+                    self.resetESP()
+                sys.stdout.flush()
                 self._port.flushInput()
                 self._port.flushOutput()
+                self._port.flushInput()
                 self.sync()
                 self._port.timeout = 5
+                print 'Connecting... Done'
                 return
+            except Exception, e:
+                print "Unexpected error:", sys.exc_info()[0], e.args
+                time.sleep(0.05 + (random.random()/30))
             except:
-                time.sleep(0.1)
+                print "Unexpected error:", sys.exc_info()[0]
+                time.sleep(0.05 + (random.random()/30))
         raise Exception('Failed to connect')
 
     """ Read memory address in target """
