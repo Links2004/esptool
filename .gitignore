@@ -1,0 +1,4 @@
+esptool.egg-info
+/dist
+/build/scripts-2.7
+/build/scripts-3.4

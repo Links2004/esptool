@@ -89,6 +89,7 @@ class ESPROM:
     def write(self, packet):
         buf = '\xc0'+(packet.replace('\xdb','\xdb\xdd').replace('\xc0','\xdb\xdc'))+'\xc0'
         self._port.write(buf)
+        self._port.flush()
 
     """ Calculate checksum of a blob, as it is defined by the ROM """
     @staticmethod
@@ -103,10 +104,16 @@ class ESPROM:
             # Construct and send request
             pkt = struct.pack('<BBHI', 0x00, op, len(data), chk) + data
             self.write(pkt)
-        
-        # Read header of response and parse
-        if self._port.read(1) != '\xc0':
-            raise Exception('Invalid head of packet ')
+        byte = ''
+        for i in range(10):
+            byte = self._port.read(1)
+            # Read header of response and parse
+            if byte == '\xc0':
+                break
+        if byte == '':
+            raise Exception('No answer from Device!')
+        if byte != '\xc0':
+            raise Exception('Invalid head of packet')
         hdr = self.read(8)
         (resp, op_ret, len_ret, val) = struct.unpack('<BBHI', hdr)
         if resp != 0x01 or (op and op_ret != op):
@@ -133,6 +140,10 @@ class ESPROM:
         # DTR = GPIO0
         print 'Reset ESP...'
         sys.stdout.flush()
+        # RTS = either CH_PD or nRESET (both active low = chip in reset)
+        # DTR = GPIO0 (active low = boot to flasher)
+        self._port.setDTR(False)
+        
         self._port.setRTS(True)
         self._port.setDTR(True)
         time.sleep(0.1)
@@ -143,27 +154,16 @@ class ESPROM:
         self._port.flushInput()
         self._port.flushOutput()
         self._port.flushInput()
-        
-        # Construct dummy and send request
-        data = '\x07\x07\x12\x20'+32*'\x55'
-        pkt = struct.pack('<BBHI', 0x00, ESPROM.ESP_SYNC, len(data), 0) + data
-        self.write(pkt)
-        self._port.flush()
-        time.sleep(0.1)
-        self.write(pkt)
-        self._port.flush()
-        time.sleep(0.2)
-        self._port.flushInput()
-        self._port.flushOutput()
-        self._port.flushInput()
+
 
     """ Try connecting repeatedly until successful, or giving up """
     def connect(self):
         print 'Connecting...'
         
         self.resetESP()
+        self.resetESP()
         
-        self._port.timeout = 0.2
+        self._port.timeout = 0.1
         for i in xrange(100):
             try:
                 #print 'Connecting... ', i
@@ -184,10 +184,10 @@ class ESPROM:
                 return
             except Exception, e:
                 print "Unexpected error:", sys.exc_info()[0], e.args
-                time.sleep(0.05 + (random.random()/30))
+                time.sleep(0.05 + (random.random()/40))
             except:
                 print "Unexpected error:", sys.exc_info()[0]
-                time.sleep(0.05 + (random.random()/30))
+                time.sleep(0.05 + (random.random()/40))
         raise Exception('Failed to connect')
 
     """ Read memory address in target """
@@ -222,12 +222,48 @@ class ESPROM:
             raise Exception('Failed to leave RAM download mode')
 
     """ Start downloading to Flash (performs an erase) """
-    def flash_begin(self, size, offset):
+    def flash_begin_old(self, size, offset):
         old_tmo = self._port.timeout
         num_blocks = (size + ESPROM.ESP_FLASH_BLOCK - 1) / ESPROM.ESP_FLASH_BLOCK
         self._port.timeout = 10
         if self.command(ESPROM.ESP_FLASH_BEGIN,
                 struct.pack('<IIII', size, num_blocks, ESPROM.ESP_FLASH_BLOCK, offset))[1] != "\0\0":
+            raise Exception('Failed to enter Flash download mode')
+        self._port.timeout = old_tmo
+   
+    """ Start downloading to Flash (performs an erase) """
+    def flash_begin(self, _size, offset):
+        old_tmo = self._port.timeout
+        self._port.timeout = 10
+
+        area_len = int(_size)
+        sector_no = offset/4096;
+        sector_num_per_block = 16;
+        #total_sector_num = (0== (area_len%4096))? area_len/4096 :  1+(area_len/4096);
+        if 0== (area_len%4096):
+            total_sector_num = area_len/4096
+        else:
+            total_sector_num = 1+(area_len/4096)
+        #check if erase area reach over block boundary
+        head_sector_num = sector_num_per_block - (sector_no%sector_num_per_block);
+        #head_sector_num = (head_sector_num>=total_sector_num)? total_sector_num : head_sector_num;
+        if head_sector_num>=total_sector_num :
+            head_sector_num = total_sector_num
+        else:
+            head_sector_num = head_sector_num
+
+        if (total_sector_num - 2 * head_sector_num)> 0:
+            size = (total_sector_num-head_sector_num)*4096
+            print "head: ",head_sector_num,";total:",total_sector_num
+            print "erase size : ",size
+        else:
+            size = int( math.ceil( total_sector_num/2.0) * 4096 )
+            print "head:",head_sector_num,";total:",total_sector_num
+            print "erase size :",size
+
+
+        if self.command(ESPROM.ESP_FLASH_BEGIN,
+                struct.pack('<IIII', size, 0x200, 0x400, offset))[1] != "\0\0":
             raise Exception('Failed to enter Flash download mode')
         self._port.timeout = old_tmo
 
@@ -240,8 +276,10 @@ class ESPROM:
     """ Leave flash mode and run/reboot """
     def flash_finish(self, reboot = False):
         pkt = struct.pack('<I', int(not reboot))
-        if self.command(ESPROM.ESP_FLASH_END, pkt)[1] != "\0\0":
-            raise Exception('Failed to leave Flash mode')
+        ret = self.command(ESPROM.ESP_FLASH_END, pkt)[1]
+        if ret != "\0\0":
+            #raise Exception('Failed to leave Flash mode')
+            print 'Failed to leave Flash mode 0000 != %s ' % (ret.encode("hex")),
 
     """ Run application code in flash """
     def run(self, reboot = False):
@@ -282,16 +320,21 @@ class ESPROM:
         self.mem_begin(len(stub), 1, len(stub), 0x40100000)
         self.mem_block(stub, 0)
         self.mem_finish(0x4010001c)
-
+        self._port.timeout = 10
+        
+        sys.stdout.flush()
+        
         # Fetch the data
         data = ''
         for _ in xrange(count):
             if self._port.read(1) != '\xc0':
+                #print 'Invalid head of packet (sflash read)'
                 raise Exception('Invalid head of packet (sflash read)')
 
             data += self.read(size)
 
             if self._port.read(1) != chr(0xc0):
+                #print 'Invalid end of packet (sflash read)'
                 raise Exception('Invalid end of packet (sflash read)')
 
         return data
@@ -567,7 +610,7 @@ if __name__ == '__main__':
             esp.flash_begin(blocks*esp.ESP_FLASH_BLOCK, address)
             seq = 0
             while len(image) > 0:
-                print '\rWriting at 0x%08x... (%d %%)' % (address + seq*esp.ESP_FLASH_BLOCK, 100*(seq+1)/blocks),
+                print '\rWriting at 0x%08x... (%d %%) ' % (address + seq*esp.ESP_FLASH_BLOCK, 100*(seq+1)/blocks),
                 sys.stdout.flush()
                 block = image[0:esp.ESP_FLASH_BLOCK]
                 # Fix sflash config data
@@ -579,7 +622,7 @@ if __name__ == '__main__':
                 image = image[esp.ESP_FLASH_BLOCK:]
                 seq += 1
             print
-        print '\nLeaving...'
+        print '\nLeaving...'	
         esp.flash_finish(False)
 
     elif args.operation == 'run':
