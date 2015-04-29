@@ -221,15 +221,8 @@ class ESPROM:
                 struct.pack('<II', int(entrypoint == 0), entrypoint))[1] != "\0\0":
             raise Exception('Failed to leave RAM download mode')
 
-    """ Start downloading to Flash (performs an erase) """
-    def flash_begin_old(self, size, offset):
-        old_tmo = self._port.timeout
-        num_blocks = (size + ESPROM.ESP_FLASH_BLOCK - 1) / ESPROM.ESP_FLASH_BLOCK
-        self._port.timeout = 10
-        if self.command(ESPROM.ESP_FLASH_BEGIN,
-                struct.pack('<IIII', size, num_blocks, ESPROM.ESP_FLASH_BLOCK, offset))[1] != "\0\0":
-            raise Exception('Failed to enter Flash download mode')
-        self._port.timeout = old_tmo
+
+
    
     """ Start downloading to Flash (performs an erase) """
     def flash_begin(self, _size, offset):
@@ -322,19 +315,16 @@ class ESPROM:
         self.mem_finish(0x4010001c)
         self._port.timeout = 10
         
-        sys.stdout.flush()
         
         # Fetch the data
         data = ''
         for _ in xrange(count):
             if self._port.read(1) != '\xc0':
-                #print 'Invalid head of packet (sflash read)'
                 raise Exception('Invalid head of packet (sflash read)')
 
             data += self.read(size)
 
             if self._port.read(1) != chr(0xc0):
-                #print 'Invalid end of packet (sflash read)'
                 raise Exception('Invalid end of packet (sflash read)')
 
         return data
