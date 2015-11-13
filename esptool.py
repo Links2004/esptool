@@ -109,9 +109,7 @@ class ESPROM:
         if op:
             pkt = struct.pack('<BBHI', 0x00, op, len(data), chk) + data
             self.write(pkt)
-        byte = ''
-        for i in range(10):
-            byte = self._port.read(1)
+
         # tries to get a response until that response has the
         # same operation as the request or a retries limit has
         # exceeded. This is needed for some esp8266s that
@@ -125,11 +123,11 @@ class ESPROM:
 
         raise FatalError("Response doesn't match request")
 
+
     """ Receive a response to a command """
     def receive_response(self):
-            # Read header of response and parse
-            if byte == '\xc0':
-                break
+        # Read header of response and parse 
+        byte = self._port.read(1)
         if byte == '':
             raise Exception('No answer from Device!')
         if byte != '\xc0':
@@ -160,8 +158,8 @@ class ESPROM:
         # DTR = GPIO0
         print 'Reset ESP...'
         sys.stdout.flush()
-        for _ in xrange(4):
-            # issue reset-to-bootloader:
+        
+        # issue reset-to-bootloader:
         # RTS = either CH_PD or nRESET (both active low = chip in reset)
         # DTR = GPIO0 (active low = boot to flasher)
         self._port.setDTR(False)
@@ -245,10 +243,11 @@ class ESPROM:
 
 
 
-   
+
     """ Start downloading to Flash (performs an erase) """
-    def flash_begin(self, _size, offset):
+    def flash_begin(self, size, offset):
         old_tmo = self._port.timeout
+        num_blocks = (size + ESPROM.ESP_FLASH_BLOCK - 1) / ESPROM.ESP_FLASH_BLOCK
 
         sectors_per_block = 16
         sector_size = 4096
@@ -401,7 +400,7 @@ class ESPFirmwareImage:
         if l % 4:
             data += b"\x00" * (4 - l % 4)
         if l > 0:
-        self.segments.append((addr, len(data), data))
+            self.segments.append((addr, len(data), data))
 
     def save(self, filename):
         f = file(filename, 'wb')
@@ -442,7 +441,7 @@ class ELFFile:
             try:
                 if fields[0] == "U":
                     raise FatalError("ELF binary has undefined symbol %s" % fields[1])
-            self.symbols[fields[2]] = int(fields[0], 16)
+                self.symbols[fields[2]] = int(fields[0], 16)
             except ValueError:
                 raise FatalError("Failed to strip symbol output from nm: %s" % fields)
 
@@ -472,7 +471,7 @@ class ELFFile:
         try:
             subprocess.check_call([tool_objcopy, "--only-section", section, "-Obinary", self.name, tmpsection])
             with open(tmpsection, "rb") as f:
-        data = f.read()
+                data = f.read()
         finally:
             os.remove(tmpsection)
         return data
