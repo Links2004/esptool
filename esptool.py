@@ -149,7 +149,7 @@ class ESPROM:
         time.sleep(0.1)
         self._port.setRTS(False)
         time.sleep(0.4 + (random.random()/5))
-        self._port.setDTR(False)
+        #self._port.setDTR(False)
         time.sleep(0.2 + (random.random()/5))
         self._port.flushInput()
         self._port.flushOutput()
